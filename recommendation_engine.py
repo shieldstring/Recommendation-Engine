@@ -1,5 +1,6 @@
 from flask import Flask, request, jsonify
 import pandas as pd
+import numpy as np
 from sklearn.decomposition import TruncatedSVD
 from scipy.sparse import csr_matrix
 import os
@@ -12,34 +13,69 @@ logging.basicConfig(level=logging.INFO,
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
-CORS(app)  # Enable CORS for Node.js backend
+CORS(app)
 
-# Global variables to store model data
+# Global variables
 df = None
 interaction_matrix = None
 matrix_factors = None
 svd = None
 
+def generate_sample_data():
+    """Generate sample user-book interactions if CSV is empty"""
+    logger.info("Generating sample data...")
+    
+    # Create sample data
+    num_users = 100
+    num_books = 50
+    user_ids = np.arange(1, num_users + 1)
+    book_ids = np.arange(1, num_books + 1)
+    
+    # Create random interactions
+    data = []
+    for user in user_ids:
+        num_interactions = np.random.randint(5, 20)
+        books = np.random.choice(book_ids, num_interactions, replace=False)
+        ratings = np.random.randint(1, 6, num_interactions)
+        for book, rating in zip(books, ratings):
+            data.append({'user_id': user, 'book_id': book, 'rating': rating})
+    
+    return pd.DataFrame(data)
+
 def load_model():
-    """Load and train the recommendation model"""
     global df, interaction_matrix, matrix_factors, svd
     
     try:
-        logger.info("Loading dataset and training model...")
-        df = pd.read_csv('user_book_interactions.csv')
+        csv_path = os.path.join(os.path.dirname(__file__), 'user_book_interactions.csv')
         
-        # Create user-book interaction matrix
-        interaction_matrix = df.pivot(index='user_id', columns='book_id', values='rating').fillna(0)
+        # Check if file exists and is not empty
+        if os.path.exists(csv_path) and os.path.getsize(csv_path) > 0:
+            logger.info("Loading dataset from CSV...")
+            df = pd.read_csv(csv_path)
+        else:
+            logger.warning("CSV file empty or not found - generating sample data")
+            df = generate_sample_data()
+            # Save the sample data for future runs
+            df.to_csv(csv_path, index=False)
+        
+        # Create interaction matrix
+        interaction_matrix = df.pivot_table(
+            index='user_id', 
+            columns='book_id', 
+            values='rating', 
+            fill_value=0
+        )
+        
+        # Train model
         sparse_matrix = csr_matrix(interaction_matrix.values)
-        
-        # Apply SVD for collaborative filtering
-        svd = TruncatedSVD(n_components=10, random_state=42)
+        svd = TruncatedSVD(n_components=min(10, sparse_matrix.shape[1] - 1), random_state=42)
         matrix_factors = svd.fit_transform(sparse_matrix)
         
-        logger.info(f"Model loaded successfully! Users: {len(interaction_matrix.index)}, Books: {len(interaction_matrix.columns)}")
+        logger.info(f"Model ready. Users: {len(interaction_matrix)}, Books: {len(interaction_matrix.columns)}")
         return True
+        
     except Exception as e:
-        logger.error(f"Error loading model: {e}")
+        logger.error(f"Model loading failed: {str(e)}")
         return False
 
 @app.route('/recommend', methods=['GET'])
